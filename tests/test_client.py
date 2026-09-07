@@ -7,13 +7,16 @@ import asyncio
 from contextlib import closing
 import socket
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import aiohttp
 
 from aiohttp import web
 import pytest
 
 from motioneye_client.client import (
     MotionEyeClient,
+    MotionEyeClientConnectionError,
     MotionEyeClientPathError,
     MotionEyeClientRequestError,
     MotionEyeClientURLParseError,
@@ -320,15 +323,14 @@ async def test_session_request_connection_error(
     assert await client.async_client_login() == {"user": "admin"}
     await server.close()
 
-    assert await client.async_get_server_config() is None
+    with pytest.raises(MotionEyeClientConnectionError):
+        await client.async_get_server_config()
     assert "Connection failed to motionEye" in caplog.text
     await client.async_client_close()
 
 
 @pytest.mark.asyncio
-async def test_session_request_client_error(
-    caplog: Any, aiohttp_server: Any
-) -> None:
+async def test_session_request_client_error(caplog: Any, aiohttp_server: Any) -> None:
     """Test an aiohttp client error after a successful session login."""
 
     async def login_handler(request: web.Request) -> web.Response:
@@ -343,9 +345,12 @@ async def test_session_request_client_error(
     async with aiohttp.ClientSession() as session:
         client = MotionEyeClient(str(server.make_url("/")), session=session)
         assert await client.async_client_login() == {"user": "admin"}
-        session.get = Mock(side_effect=aiohttp.ClientError("request failed"))  # type: ignore[method-assign]
+        session.get = Mock(  # type: ignore[method-assign]
+            side_effect=aiohttp.ClientError("request failed")
+        )
 
-        assert await client.async_get_server_config() is None
+        with pytest.raises(MotionEyeClientRequestError):
+            await client.async_get_server_config()
 
     assert "Request failed to motionEye" in caplog.text
 
