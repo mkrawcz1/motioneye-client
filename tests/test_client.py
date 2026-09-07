@@ -1,6 +1,5 @@
 """Test the motionEye client."""
 
-# CI validation for motionEye 0.44 authentication changes (workflow enabled).
 from __future__ import annotations
 
 import asyncio
