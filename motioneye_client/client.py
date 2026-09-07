@@ -298,6 +298,52 @@ class MotionEyeClient:
         """Get the motionEye manifest."""
         return await self._async_request("/manifest.json")
 
+    async def async_get_camera_snapshot(
+        self, camera_id: int, allow_reauth: bool = True
+    ) -> bytes:
+        """Fetch the current camera snapshot."""
+        path = f"/picture/{camera_id}/current/"
+
+        if self._auth_mode == "session":
+            url = self._build_session_url(path)
+            headers = self._session_headers()
+        else:
+            url = self._build_url(path, admin=False)
+            headers = {}
+
+        try:
+            async with self._session.get(url, headers=headers) as response:
+                _LOGGER.debug("GET %s -> %i", url, response.status)
+
+                if response.status == 403:
+                    if self._auth_mode == "session" and allow_reauth:
+                        _LOGGER.debug("motionEye session expired; logging in again")
+                        await self._async_session_login()
+                        return await self.async_get_camera_snapshot(
+                            camera_id, allow_reauth=False
+                        )
+
+                    _LOGGER.warning(
+                        "Authentication failed in request to %s : %s", url, response
+                    )
+                    raise MotionEyeClientInvalidAuthError(response)
+
+                if not response.ok:
+                    _LOGGER.warning(
+                        "Unexpected HTTP response status code %s for request: %s",
+                        response.status,
+                        url,
+                    )
+                    raise MotionEyeClientRequestError(response)
+
+                return await response.read()
+        except aiohttp.client_exceptions.ClientConnectorError as exc:
+            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            raise MotionEyeClientConnectionError(exc) from exc
+        except aiohttp.client_exceptions.ClientError as exc:
+            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            raise MotionEyeClientRequestError(exc) from exc
+
     async def async_get_server_config(self) -> dict[str, Any] | None:
         """Get the motionEye server config ."""
         return await self._async_request("/config/main/get")
