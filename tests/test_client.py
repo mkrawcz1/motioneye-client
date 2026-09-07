@@ -121,6 +121,190 @@ async def test_client_login_success(aiohttp_server: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_login_and_request(aiohttp_server: Any) -> None:
+    """Test motionEye 0.44 session login and authenticated request."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        data = await request.post()
+        assert data["username"] == "admin"
+        assert data["password"] == "password"
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def config_handler(request: web.Request) -> web.Response:
+        assert "_username" not in request.query
+        assert "_signature" not in request.query
+        assert request.headers["Cookie"] == "user=session-token"
+        return web.json_response({"key": "value"})
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/config/main/get", config_handler),
+        ],
+    )
+
+    async with MotionEyeClient(
+        str(server.make_url("/")),
+        admin_username="admin",
+        admin_password="password",
+    ) as client:
+        assert client
+        assert await client.async_get_server_config() == {"key": "value"}
+
+
+@pytest.mark.asyncio
+async def test_session_request_with_params_and_json(aiohttp_server: Any) -> None:
+    """Test query parameters and JSON body with session authentication."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def images_handler(request: web.Request) -> web.Response:
+        assert request.query["prefix"] == "foo"
+        assert request.headers["Cookie"] == "user=session-token"
+        return web.json_response({"mediaList": []})
+
+    async def set_camera_handler(request: web.Request) -> web.Response:
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.headers["Cookie"] == "user=session-token"
+        assert await request.json() == {"key": "value"}
+        return web.json_response({})
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/list", images_handler),
+            web.post("/config/1/set", set_camera_handler),
+        ],
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert client
+        assert await client.async_get_images(1, prefix="foo") == {"mediaList": []}
+        assert await client.async_set_camera(1, {"key": "value"}) == {}
+
+
+@pytest.mark.asyncio
+async def test_session_reauthentication(aiohttp_server: Any) -> None:
+    """Test automatic re-login after an expired motionEye session."""
+
+    login_count = 0
+    request_count = 0
+
+    async def login_handler(request: web.Request) -> web.Response:
+        nonlocal login_count
+        login_count += 1
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", f"session-{login_count}")
+        return response
+
+    async def config_handler(request: web.Request) -> web.Response:
+        nonlocal request_count
+        request_count += 1
+        if request_count == 1:
+            assert request.headers["Cookie"] == "user=session-1"
+            return web.json_response({"error": "unauthorized"}, status=403)
+
+        assert request.headers["Cookie"] == "user=session-2"
+        return web.json_response({"key": "value"})
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/config/main/get", config_handler),
+        ],
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert client
+        assert await client.async_get_server_config() == {"key": "value"}
+
+    assert login_count == 2
+    assert request_count == 2
+
+
+@pytest.mark.asyncio
+async def test_session_login_invalid_credentials(
+    caplog: Any, aiohttp_server: Any
+) -> None:
+    """Test invalid credentials with motionEye 0.44 session login."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        return web.json_response({"error": "invalid credentials"}, status=401)
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert not client
+
+    assert "Authentication failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_session_login_missing_cookie(
+    caplog: Any, aiohttp_server: Any
+) -> None:
+    """Test a successful session login response without a session cookie."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        return web.json_response({"user": "admin"})
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert not client
+
+    assert "without a user cookie" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_session_login_bad_response(
+    caplog: Any, aiohttp_server: Any
+) -> None:
+    """Test an unexpected response to session login."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        return web.json_response({"error": "failed"}, status=500)
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert not client
+
+    assert "Unexpected HTTP response status code 500" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_session_login_non_json_response(aiohttp_server: Any) -> None:
+    """Test a non-JSON session login response."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.Response(text="not json")
+        response.set_cookie("user", "session-token")
+        return response
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    async with MotionEyeClient(str(server.make_url("/"))) as client:
+        assert not client
+
+
+@pytest.mark.asyncio
 async def test_client_login_failure(caplog: Any, aiohttp_server: Any) -> None:
     """Test failed client login."""
 
