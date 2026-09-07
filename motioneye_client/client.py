@@ -81,6 +81,7 @@ class MotionEyeClient:
             surveillance_username or DEFAULT_SURVEILLANCE_USERNAME
         )
         self._surveillance_password = surveillance_password or ""
+        self._auth_mode: str | None = None
 
     async def __aenter__(self) -> MotionEyeClient | None:
         """Enter context manager and connect the client."""
