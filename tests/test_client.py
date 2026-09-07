@@ -552,6 +552,115 @@ async def test_session_camera_snapshot_client_error(aiohttp_server: Any) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("image", "preview", "expected_path"),
+    [
+        (True, False, "/picture/1/download/2026-09-07/test.jpg"),
+        (True, True, "/picture/1/preview/2026-09-07/test.jpg"),
+        (False, False, "/movie/1/playback/2026-09-07/test.mp4"),
+        (False, True, "/movie/1/preview/2026-09-07/test.mp4"),
+    ],
+)
+async def test_session_saved_media(
+    aiohttp_server: Any, image: bool, preview: bool, expected_path: str
+) -> None:
+    """Test saved media fetch with session authentication."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def media_handler(request: web.Request) -> web.Response:
+        assert request.cookies.get("user") == "session-token"
+        return web.Response(body=b"media-data")
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get(expected_path, media_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+
+    path = (
+        "/2026-09-07/test.jpg" if image else "/2026-09-07/test.mp4"
+    )
+    assert (
+        await client.async_get_media(1, path, image=image, preview=preview)
+        == b"media-data"
+    )
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_saved_media_reauth(aiohttp_server: Any) -> None:
+    """Test saved media reauthentication."""
+    login_count = 0
+
+    async def login_handler(request: web.Request) -> web.Response:
+        nonlocal login_count
+        login_count += 1
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", f"session-token-{login_count}")
+        return response
+
+    async def media_handler(request: web.Request) -> web.Response:
+        if request.cookies.get("user") == "session-token-1":
+            return web.Response(status=403)
+        return web.Response(body=b"media-data")
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/download/test.jpg", media_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+    assert (
+        await client.async_get_media(1, "/test.jpg", image=True)
+        == b"media-data"
+    )
+    assert login_count == 2
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_saved_media(aiohttp_server: Any) -> None:
+    """Test saved media fetch with legacy authentication."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        return web.json_response({})
+
+    async def media_handler(request: web.Request) -> web.Response:
+        assert request.query["_username"] == "user"
+        assert "_signature" in request.query
+        return web.Response(body=b"media-data")
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.get("/login", login_handler),
+            web.get("/picture/1/download/test.jpg", media_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+    assert (
+        await client.async_get_media(1, "/test.jpg", image=True)
+        == b"media-data"
+    )
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
 async def test_client_login_failure(caplog: Any, aiohttp_server: Any) -> None:
     """Test failed client login."""
 
