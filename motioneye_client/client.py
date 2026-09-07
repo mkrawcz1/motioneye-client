@@ -82,6 +82,7 @@ class MotionEyeClient:
         )
         self._surveillance_password = surveillance_password or ""
         self._auth_mode: str | None = None
+        self._session_cookie: str | None = None
 
     async def __aenter__(self) -> MotionEyeClient | None:
         """Enter context manager and connect the client."""
@@ -124,6 +125,87 @@ class MotionEyeClient:
         url += f"&_signature={signature}"
         return url
 
+    def _build_session_url(
+        self, path: str, params: dict[str, Any] | None = None
+    ) -> str:
+        """Build a URL for session-authenticated motionEye requests."""
+        query = f"?{urlencode(params)}" if params else ""
+        return urljoin(self._url, path + query)
+
+    def _session_headers(self, serialized_json: str | None = None) -> dict[str, str]:
+        """Build headers for a session-authenticated request."""
+        headers: dict[str, str] = {}
+        if serialized_json is not None:
+            headers["Content-Type"] = "application/json"
+        if self._session_cookie:
+            headers["Cookie"] = f"user={self._session_cookie}"
+        return headers
+
+    async def _async_session_login(self) -> dict[str, Any] | None:
+        """Login using session authentication introduced in motionEye 0.44."""
+        url = urljoin(self._url, "/login")
+
+        try:
+            async with self._session.post(
+                url,
+                data={
+                    "username": self._admin_username,
+                    "password": self._admin_password,
+                },
+            ) as response:
+                _LOGGER.debug("POST %s -> %i", url, response.status)
+
+                # Older motionEye releases don't implement POST /login. Their
+                # BaseHandler returns 400 for unsupported methods, while other
+                # deployments may return 404/405.
+                if response.status in (400, 404, 405):
+                    return None
+
+                if response.status in (401, 403):
+                    _LOGGER.warning("Authentication failed in request to %s", url)
+                    raise MotionEyeClientInvalidAuthError(response)
+
+                if not response.ok:
+                    _LOGGER.warning(
+                        "Unexpected HTTP response status code %s for request: %s",
+                        response.status,
+                        url,
+                    )
+                    raise MotionEyeClientRequestError(response)
+
+                cookie = response.cookies.get("user")
+                if cookie is None:
+                    _LOGGER.warning(
+                        "motionEye session login succeeded without a user cookie"
+                    )
+                    raise MotionEyeClientRequestError(response)
+
+                # Keep the cookie explicitly. aiohttp's default CookieJar rejects
+                # cookies set by IP-address hosts unless unsafe=True, while IP
+                # addresses are common for motionEye installations.
+                self._session_cookie = cookie.value
+                self._auth_mode = "session"
+
+                try:
+                    return_value: dict[str, Any] | None = await response.json(
+                        content_type=None
+                    )
+                    return return_value
+                except (json.decoder.JSONDecodeError, UnicodeDecodeError) as exc:
+                    _LOGGER.error("Could not JSON decode: %r", await response.read())
+                    raise MotionEyeClientRequestError(response) from exc
+        except aiohttp.client_exceptions.ClientConnectorError as exc:
+            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            raise MotionEyeClientConnectionError(exc) from exc
+        except aiohttp.client_exceptions.ClientError as exc:
+            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            raise MotionEyeClientRequestError(exc) from exc
+
+    async def _async_legacy_login(self) -> dict[str, Any] | None:
+        """Login using legacy signature authentication."""
+        self._auth_mode = "legacy"
+        return await self._async_request("/login", allow_reauth=False)
+
     async def _async_request(
         self,
         path: str,
@@ -131,60 +213,80 @@ class MotionEyeClient:
         data: dict[str, Any] | None = None,
         method: str = "GET",
         admin: bool = True,
+        allow_reauth: bool = True,
     ) -> dict[str, Any] | None:
         """Fetch return code and JSON from motionEye server."""
 
         serialized_json = json.dumps(data) if data is not None else None
-        url = self._build_url(
-            path,
-            params=params,
-            data=serialized_json,
-            method=method,
-            admin=admin,
-        )
 
-        headers = {}
-        if serialized_json:
-            headers = {"Content-Type": "application/json"}
-
-        if method == "GET":
-            func = self._session.get
+        if self._auth_mode == "session":
+            url = self._build_session_url(path, params=params)
+            headers = self._session_headers(serialized_json)
         else:
-            func = self._session.post
+            url = self._build_url(
+                path,
+                params=params,
+                data=serialized_json,
+                method=method,
+                admin=admin,
+            )
+            headers = {}
+            if serialized_json:
+                headers = {"Content-Type": "application/json"}
 
-        coro = func(url, data=serialized_json, headers=headers)
+        func = self._session.get if method == "GET" else self._session.post
 
         try:
-            async with coro as response:
+            async with func(url, data=serialized_json, headers=headers) as response:
                 _LOGGER.debug("%s %s -> %i", method, url, response.status)
+
                 if response.status == 403:
+                    if self._auth_mode == "session" and allow_reauth:
+                        _LOGGER.debug("motionEye session expired; logging in again")
+                        await self._async_session_login()
+                        return await self._async_request(
+                            path,
+                            params=params,
+                            data=data,
+                            method=method,
+                            admin=admin,
+                            allow_reauth=False,
+                        )
+
                     _LOGGER.warning(
-                        f"Authentication failed in request to {url} : {response}"
+                        "Authentication failed in request to %s : %s", url, response
                     )
                     raise MotionEyeClientInvalidAuthError(response)
-                elif not response.ok:
+
+                if not response.ok:
                     _LOGGER.warning(
-                        f"Unexpected HTTP response status code {response.status} for request: {url}"
+                        "Unexpected HTTP response status code %s for request: %s",
+                        response.status,
+                        url,
                     )
                     raise MotionEyeClientRequestError(response)
+
                 try:
                     return_value: dict[str, Any] | None = await response.json(
                         content_type=None
                     )
                     return return_value
                 except (json.decoder.JSONDecodeError, UnicodeDecodeError) as exc:
-                    _LOGGER.error(f"Could not JSON decode: {await response.read()!r}")
+                    _LOGGER.error("Could not JSON decode: %r", await response.read())
                     raise MotionEyeClientRequestError(response) from exc
         except aiohttp.client_exceptions.ClientConnectorError as exc:
-            _LOGGER.warning(f"Connection failed to motionEye: {exc}")
+            _LOGGER.warning("Connection failed to motionEye: %s", exc)
             raise MotionEyeClientConnectionError(exc) from exc
         except aiohttp.client_exceptions.ClientError as exc:
-            _LOGGER.warning(f"Request failed to motionEye: {exc}")
+            _LOGGER.warning("Request failed to motionEye: %s", exc)
             raise MotionEyeClientRequestError(exc) from exc
 
     async def async_client_login(self) -> dict[str, Any] | None:
         """Login to the motionEye server."""
-        return await self._async_request("/login")
+        session_response = await self._async_session_login()
+        if self._auth_mode == "session":
+            return session_response
+        return await self._async_legacy_login()
 
     async def async_client_close(self) -> bool:
         """Disconnect from the MotionEye server."""
