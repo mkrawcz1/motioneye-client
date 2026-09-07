@@ -648,10 +648,7 @@ async def test_legacy_saved_media(aiohttp_server: Any) -> None:
 
     client = MotionEyeClient(str(server.make_url("/")))
     await client.async_client_login()
-    assert (
-        await client.async_get_media(1, "/test.jpg", image=True)
-        == b"media-data"
-    )
+    assert await client.async_get_media(1, "/test.jpg", image=True) == b"media-data"
     await client.async_client_close()
 
 
