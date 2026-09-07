@@ -1,5 +1,6 @@
 """Test the motionEye client."""
 
+# CI validation for motionEye 0.44 authentication changes.
 from __future__ import annotations
 
 import asyncio
