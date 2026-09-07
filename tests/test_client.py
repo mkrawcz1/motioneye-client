@@ -10,7 +10,6 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import aiohttp
-
 from aiohttp import web
 import pytest
 
