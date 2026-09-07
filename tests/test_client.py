@@ -355,6 +355,71 @@ async def test_session_request_client_error(caplog: Any, aiohttp_server: Any) ->
 
 
 @pytest.mark.asyncio
+async def test_session_camera_snapshot(aiohttp_server: Any) -> None:
+    """Test fetching a camera snapshot with session authentication."""
+    requests = {"snapshot": 0}
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def snapshot_handler(request: web.Request) -> web.Response:
+        requests["snapshot"] += 1
+        assert request.cookies.get("user") == "session-token"
+        return web.Response(body=b"jpeg-data", content_type="image/jpeg")
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/current/", snapshot_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+
+    assert await client.async_get_camera_snapshot(1) == b"jpeg-data"
+    assert requests["snapshot"] == 1
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_camera_snapshot_reauth(aiohttp_server: Any) -> None:
+    """Test snapshot reauthentication after an expired session."""
+    login_count = 0
+
+    async def login_handler(request: web.Request) -> web.Response:
+        nonlocal login_count
+        login_count += 1
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", f"session-token-{login_count}")
+        return response
+
+    async def snapshot_handler(request: web.Request) -> web.Response:
+        if request.cookies.get("user") == "session-token-1":
+            return web.Response(status=403)
+        assert request.cookies.get("user") == "session-token-2"
+        return web.Response(body=b"jpeg-data", content_type="image/jpeg")
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/current/", snapshot_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+
+    assert await client.async_get_camera_snapshot(1) == b"jpeg-data"
+    assert login_count == 2
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
 async def test_client_login_failure(caplog: Any, aiohttp_server: Any) -> None:
     """Test failed client login."""
 
