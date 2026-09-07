@@ -586,9 +586,7 @@ async def test_session_saved_media(
     client = MotionEyeClient(str(server.make_url("/")))
     await client.async_client_login()
 
-    path = (
-        "/2026-09-07/test.jpg" if image else "/2026-09-07/test.mp4"
-    )
+    path = "/2026-09-07/test.jpg" if image else "/2026-09-07/test.mp4"
     assert (
         await client.async_get_media(1, path, image=image, preview=preview)
         == b"media-data"
@@ -623,10 +621,7 @@ async def test_session_saved_media_reauth(aiohttp_server: Any) -> None:
 
     client = MotionEyeClient(str(server.make_url("/")))
     await client.async_client_login()
-    assert (
-        await client.async_get_media(1, "/test.jpg", image=True)
-        == b"media-data"
-    )
+    assert await client.async_get_media(1, "/test.jpg", image=True) == b"media-data"
     assert login_count == 2
     await client.async_client_close()
 
@@ -658,6 +653,110 @@ async def test_legacy_saved_media(aiohttp_server: Any) -> None:
         == b"media-data"
     )
     await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_saved_media_forbidden_after_reauth(
+    aiohttp_server: Any,
+) -> None:
+    """Test media authentication failure after one retry."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def media_handler(request: web.Request) -> web.Response:
+        return web.Response(status=403)
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/download/test.jpg", media_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+
+    with pytest.raises(MotionEyeClientInvalidAuthError):
+        await client.async_get_media(1, "/test.jpg", image=True)
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_saved_media_bad_response(aiohttp_server: Any) -> None:
+    """Test unexpected media HTTP response."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    async def media_handler(request: web.Request) -> web.Response:
+        return web.Response(status=500)
+
+    server = await _create_motioneye_server(
+        aiohttp_server,
+        [
+            web.post("/login", login_handler),
+            web.get("/picture/1/download/test.jpg", media_handler),
+        ],
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+
+    with pytest.raises(MotionEyeClientRequestError):
+        await client.async_get_media(1, "/test.jpg", image=True)
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_saved_media_connection_error(aiohttp_server: Any) -> None:
+    """Test connection error while fetching saved media."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    client = MotionEyeClient(str(server.make_url("/")))
+    await client.async_client_login()
+    await server.close()
+
+    with pytest.raises(MotionEyeClientConnectionError):
+        await client.async_get_media(1, "/test.jpg", image=True)
+    await client.async_client_close()
+
+
+@pytest.mark.asyncio
+async def test_session_saved_media_client_error(aiohttp_server: Any) -> None:
+    """Test aiohttp client error while fetching saved media."""
+
+    async def login_handler(request: web.Request) -> web.Response:
+        response = web.json_response({"user": "admin"})
+        response.set_cookie("user", "session-token")
+        return response
+
+    server = await _create_motioneye_server(
+        aiohttp_server, [web.post("/login", login_handler)]
+    )
+
+    async with aiohttp.ClientSession() as session:
+        client = MotionEyeClient(str(server.make_url("/")), session=session)
+        await client.async_client_login()
+        session.get = Mock(  # type: ignore[method-assign]
+            side_effect=aiohttp.ClientError("request failed")
+        )
+
+        with pytest.raises(MotionEyeClientRequestError):
+            await client.async_get_media(1, "/test.jpg", image=True)
 
 
 @pytest.mark.asyncio
