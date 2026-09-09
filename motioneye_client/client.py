@@ -254,7 +254,7 @@ class MotionEyeClient:
                         )
 
                     _LOGGER.warning(
-                        "Authentication failed in request to %s : %s", url, response
+                        f"Authentication failed in request to {url} : {response}"
                     )
                     raise MotionEyeClientInvalidAuthError(response)
 
