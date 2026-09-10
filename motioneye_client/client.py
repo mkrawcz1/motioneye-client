@@ -153,7 +153,7 @@ class MotionEyeClient:
                     "password": self._admin_password,
                 },
             ) as response:
-                _LOGGER.debug("POST %s -> %i", url, response.status)
+                _LOGGER.debug(f"POST {url} -> {response.status}")
 
                 # Older motionEye releases don't implement POST /login. Their
                 # BaseHandler returns 400 for unsupported methods, while other
@@ -162,14 +162,12 @@ class MotionEyeClient:
                     return None
 
                 if response.status in (401, 403):
-                    _LOGGER.warning("Authentication failed in request to %s", url)
+                    _LOGGER.warning(f"Authentication failed in request to {url}")
                     raise MotionEyeClientInvalidAuthError(response)
 
                 if not response.ok:
                     _LOGGER.warning(
-                        "Unexpected HTTP response status code %s for request: %s",
-                        response.status,
-                        url,
+                        f"Unexpected HTTP response status code {response.status} for request: {url}"
                     )
                     raise MotionEyeClientRequestError(response)
 
@@ -192,13 +190,13 @@ class MotionEyeClient:
                     )
                     return return_value
                 except (json.decoder.JSONDecodeError, UnicodeDecodeError) as exc:
-                    _LOGGER.error("Could not JSON decode: %r", await response.read())
+                    _LOGGER.error(f"Could not JSON decode: {await response.read()!r}")
                     raise MotionEyeClientRequestError(response) from exc
         except aiohttp.client_exceptions.ClientConnectorError as exc:
-            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Connection failed to motionEye: {exc}")
             raise MotionEyeClientConnectionError(exc) from exc
         except aiohttp.client_exceptions.ClientError as exc:
-            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Request failed to motionEye: {exc}")
             raise MotionEyeClientRequestError(exc) from exc
 
     async def _async_legacy_login(self) -> dict[str, Any] | None:
@@ -238,7 +236,7 @@ class MotionEyeClient:
 
         try:
             async with func(url, data=serialized_json, headers=headers) as response:
-                _LOGGER.debug("%s %s -> %i", method, url, response.status)
+                _LOGGER.debug(f"{method} {url} -> {response.status}")
 
                 if response.status == 403:
                     if self._auth_mode == "session" and allow_reauth:
@@ -260,9 +258,7 @@ class MotionEyeClient:
 
                 if not response.ok:
                     _LOGGER.warning(
-                        "Unexpected HTTP response status code %s for request: %s",
-                        response.status,
-                        url,
+                        f"Unexpected HTTP response status code {response.status} for request: {url}"
                     )
                     raise MotionEyeClientRequestError(response)
 
@@ -272,13 +268,13 @@ class MotionEyeClient:
                     )
                     return return_value
                 except (json.decoder.JSONDecodeError, UnicodeDecodeError) as exc:
-                    _LOGGER.error("Could not JSON decode: %r", await response.read())
+                    _LOGGER.error(f"Could not JSON decode: {await response.read()!r}")
                     raise MotionEyeClientRequestError(response) from exc
         except aiohttp.client_exceptions.ClientConnectorError as exc:
-            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Connection failed to motionEye: {exc}")
             raise MotionEyeClientConnectionError(exc) from exc
         except aiohttp.client_exceptions.ClientError as exc:
-            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Request failed to motionEye: {exc}")
             raise MotionEyeClientRequestError(exc) from exc
 
     async def async_client_login(self) -> dict[str, Any] | None:
@@ -313,7 +309,7 @@ class MotionEyeClient:
 
         try:
             async with self._session.get(url, headers=headers) as response:
-                _LOGGER.debug("GET %s -> %i", url, response.status)
+                _LOGGER.debug(f"GET {url} -> {response.status}")
 
                 if response.status == 403:
                     if self._auth_mode == "session" and allow_reauth:
@@ -324,24 +320,22 @@ class MotionEyeClient:
                         )
 
                     _LOGGER.warning(
-                        "Authentication failed in request to %s : %s", url, response
+                        f"Authentication failed in request to {url} : {response}"
                     )
                     raise MotionEyeClientInvalidAuthError(response)
 
                 if not response.ok:
                     _LOGGER.warning(
-                        "Unexpected HTTP response status code %s for request: %s",
-                        response.status,
-                        url,
+                        f"Unexpected HTTP response status code {response.status} for request: {url}"
                     )
                     raise MotionEyeClientRequestError(response)
 
                 return await response.read()
         except aiohttp.client_exceptions.ClientConnectorError as exc:
-            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Connection failed to motionEye: {exc}")
             raise MotionEyeClientConnectionError(exc) from exc
         except aiohttp.client_exceptions.ClientError as exc:
-            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Request failed to motionEye: {exc}")
             raise MotionEyeClientRequestError(exc) from exc
 
     async def async_get_server_config(self) -> dict[str, Any] | None:
@@ -452,7 +446,7 @@ class MotionEyeClient:
 
         try:
             async with self._session.get(url, headers=headers) as response:
-                _LOGGER.debug("GET %s -> %i", url, response.status)
+                _LOGGER.debug(f"GET {url} -> {response.status}")
 
                 if response.status == 403:
                     if self._auth_mode == "session" and allow_reauth:
@@ -467,24 +461,22 @@ class MotionEyeClient:
                         )
 
                     _LOGGER.warning(
-                        "Authentication failed in request to %s : %s", url, response
+                        f"Authentication failed in request to {url} : {response}"
                     )
                     raise MotionEyeClientInvalidAuthError(response)
 
                 if not response.ok:
                     _LOGGER.warning(
-                        "Unexpected HTTP response status code %s for request: %s",
-                        response.status,
-                        url,
+                        f"Unexpected HTTP response status code {response.status} for request: {url}"
                     )
                     raise MotionEyeClientRequestError(response)
 
                 return await response.read()
         except aiohttp.client_exceptions.ClientConnectorError as exc:
-            _LOGGER.warning("Connection failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Connection failed to motionEye: {exc}")
             raise MotionEyeClientConnectionError(exc) from exc
         except aiohttp.client_exceptions.ClientError as exc:
-            _LOGGER.warning("Request failed to motionEye: %s", exc)
+            _LOGGER.warning(f"Request failed to motionEye: {exc}")
             raise MotionEyeClientRequestError(exc) from exc
 
     def get_movie_url(self, camera_id: int, path: str, preview: bool = False) -> str:
